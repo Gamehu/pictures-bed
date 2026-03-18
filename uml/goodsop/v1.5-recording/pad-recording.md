@@ -1,7 +1,7 @@
 # v1.5 PAD 前台录音详细架构图
 
-> PAD 端录音全链路详细图示。
-> 返回总览：[overview.md](./overview.md)
+> 本文档为 `v1.5-详细设计.md` 第 9 章配套图示 —— PAD 端录音全链路。
+> 返回总览：[v1.5-架构图-总览.md](./v1.5-架构图-总览.md)
 
 ---
 
@@ -9,24 +9,24 @@
 
 ```mermaid
 graph TD
-    subgraph PAD["📱 前台 PAD（单用户设备）"]
-        MIC["麦克风\nMediaRecorder API"]
-        UI_PAD["录音控制 UI\n开始 / 暂停 / 继续 / 停止"]
-        WS_PAD["WebSocket 单连接\nws://host/ws/dialogue"]
+    subgraph PAD["前台 PAD（单用户设备）"]
+        MIC["麦克风 MediaRecorder API"]
+        UI_PAD["录音控制 UI"]
+        WS_PAD["WebSocket 单连接"]
     end
 
     subgraph GW["goodsop-common-websocket"]
-        Interceptor["UserAttributeHandshakeInterceptor\n① 验证 JWT Token\n② 提取 userId · tenantId · shopId\n③ 写入 WS Session Attributes"]
-        Handler["CustomWebSocketHandler\n① TextMessage → 按 type 路由\n② BinaryMessage → AudioFrameHandler"]
-        Holder["WebSocketSessionHolder\nConcurrentHashMap&lt;sessionKey, WsSession&gt;"]
+        Interceptor["UserAttributeHandshakeInterceptor\n验证JWT 提取userId/tenantId/shopId"]
+        Handler["CustomWebSocketHandler\nText→路由 Binary→AudioFrameHandler"]
+        Holder["WebSocketSessionHolder"]
     end
 
     subgraph BIZ["goodsop-app-server-biz"]
         AFH["AudioFrameHandler"]
         Resolver["DefaultIdentityResolver\nloginUserId = recordingUserId"]
-        Coord["RecordingSessionCoordinator\n状态机：IDLE→RECORDING→PAUSED→STOPPED"]
-        Store["RecordingSessionContextStore\nConcurrentHashMap&lt;wsSessionId, SessionContext&gt;"]
-        ASR_CLI["AsrWebSocketClient\n转发音频 · 接收转写结果"]
+        Coord["RecordingSessionCoordinator\nIDLE→RECORDING→PAUSED→STOPPED"]
+        Store["RecordingSessionContextStore\nConcurrentHashMap"]
+        ASR_CLI["AsrWebSocketClient\n转发音频 接收转写结果"]
         Timeout["AsrSessionTimeoutManager\n无帧超时检测"]
     end
 
@@ -37,7 +37,7 @@ graph TD
 
     MIC --> WS_PAD
     UI_PAD --> WS_PAD
-    WS_PAD -- "握手 Header:\nroleCode=RECEPTIONIST\nAuthorization=Bearer JWT" --> Interceptor
+    WS_PAD -- "Header: roleCode=RECEPTIONIST" --> Interceptor
     Interceptor --> Handler
     Handler --> Holder
     Handler --> AFH
@@ -48,96 +48,101 @@ graph TD
     Store --> Timeout
     Coord --> PG
     Store --> REDIS
-    ASR_CLI -- "ASR 转写结果回调" --> AFH
+    ASR_CLI -- "ASR转写回调" --> AFH
 ```
 
 ---
 
 ## 2. 完整录音时序图
 
+### 阶段说明
+
+| 阶段 | 触发动作 | 核心操作 |
+|------|---------|---------|
+| ① 握手 | 点击「叫号/开始」 | HTTP Upgrade → WS 连接建立 |
+| ② START | 发送 START 控制帧 | 创建 SessionContext，建立 ASR 连接 |
+| ③ 传帧 | 持续采集音频 | 每 100ms 一帧，ASR 实时转写 |
+| ④ PAUSE | 点击「暂停」 | state → PAUSED，WS/ASR 保持 |
+| ⑤ RESUME | 点击「继续」 | state → RECORDING |
+| ⑥ STOP | 点击「完成」 | 关闭 ASR，归档，关闭 WS |
+
 ```mermaid
 sequenceDiagram
     actor 前台接待员
     participant PAD as 前台 PAD
     participant Interceptor as 握手拦截器
-    participant Handler as CustomWebSocketHandler
+    participant Handler as WsHandler
     participant AFH as AudioFrameHandler
     participant Resolver as DefaultIdentityResolver
-    participant Coord as RecordingSessionCoordinator
+    participant Coord as Coordinator
     participant Store as ContextStore
     participant ASR as AsrWebSocketClient
     participant DB as PostgreSQL
 
     rect rgb(232, 244, 253)
-        Note over 前台接待员,DB: 阶段一：WebSocket 握手
-        前台接待员 ->> PAD: 点击「叫号 / 开始」
-        PAD ->> Interceptor: HTTP Upgrade 请求<br/>roleCode=RECEPTIONIST / Authorization=Bearer JWT
-        Interceptor ->> Interceptor: 验证 JWT，提取 userId、tenantId、shopId
-        Interceptor -->> PAD: 101 Switching Protocols，WS 连接建立
-        Handler ->> Handler: onConnectionEstablished()，注册到 WebSocketSessionHolder
+        Note over 前台接待员,DB: 阶段① WebSocket 握手
+        前台接待员 ->> PAD: 点击「叫号/开始」
+        PAD ->> Interceptor: HTTP Upgrade (roleCode=RECEPTIONIST, JWT)
+        Interceptor ->> Interceptor: 验证JWT，提取userId/tenantId
+        Interceptor -->> PAD: 101 Switching Protocols
+        Handler ->> Handler: onConnectionEstablished 注册到Holder
     end
 
     rect rgb(232, 245, 232)
-        Note over 前台接待员,DB: 阶段二：开始录音（START）
-        PAD ->> Handler: TextMessage {type:"AUDIO_FRAME", controlAction:"START", sessionId:wsUUID, archiveSessionId:xxx}
+        Note over 前台接待员,DB: 阶段② START 开始录音
+        PAD ->> Handler: TextMessage {controlAction:START, sessionId:wsUUID}
         Handler ->> AFH: handleTextMessage()
         AFH ->> Resolver: resolveRecordingUserId(session, loginUserId)
-        Resolver -->> AFH: loginUserId（PAD 默认：登录人即录音人）
+        Resolver -->> AFH: loginUserId（PAD：登录人即录音人）
         AFH ->> Coord: startSession(wsUUID, archiveSessionId, recordingUserId)
-        Coord ->> Store: createContext(wsUUID) state=RECORDING, recordingUserId=loginUserId, roleCode=RECEPTIONIST
-        Coord ->> ASR: 建立 ASR WebSocket 连接
-        Coord ->> DB: INSERT lu_communication_log_session (sequenceNumber=1)
-        Coord -->> AFH: session started
-        AFH -->> PAD: ACK {type:"RECORDING_STARTED"}
+        Coord ->> Store: createContext(wsUUID, state=RECORDING)
+        Coord ->> ASR: 建立ASR WebSocket连接
+        Coord ->> DB: INSERT lu_communication_log_session (seq=1)
+        AFH -->> PAD: ACK RECORDING_STARTED
     end
 
     rect rgb(255, 248, 225)
-        Note over 前台接待员,DB: 阶段三：音频帧持续传输
+        Note over 前台接待员,DB: 阶段③ 音频帧持续传输
         loop 每 100ms 一帧
-            PAD ->> Handler: BinaryMessage（PCM 音频帧）
+            PAD ->> Handler: BinaryMessage（PCM音频帧）
             Handler ->> AFH: handleBinaryMessage()
-            AFH ->> Store: getContext(wsUUID)，验证 state=RECORDING
+            AFH ->> Store: getContext(wsUUID) 验证state=RECORDING
             AFH ->> ASR: 转发音频帧
-            ASR -->> AFH: ASR 转写结果（异步回调）
-            AFH ->> DB: INSERT lu_communication_audio（音频帧）/ INSERT lu_communication_segment（转写文本）
+            ASR -->> AFH: ASR转写结果（异步回调）
+            AFH ->> DB: INSERT audio帧 + segment转写文本
         end
     end
 
     rect rgb(252, 228, 236)
-        Note over 前台接待员,DB: 阶段四：暂停录音
+        Note over 前台接待员,DB: 阶段④ 暂停录音
         前台接待员 ->> PAD: 点击「暂停」
-        PAD ->> Handler: TextMessage {controlAction:"PAUSE"}
-        Handler ->> AFH: handleTextMessage()
+        PAD ->> Handler: TextMessage {controlAction:PAUSE}
         AFH ->> Coord: pauseSession(wsUUID)
-        Coord ->> Store: context.state = PAUSED，记录 pauseTime
-        Coord -->> AFH: paused
-        AFH -->> PAD: ACK {type:"RECORDING_PAUSED"}
-        Note over PAD,ASR: WS 连接保持，ASR 连接保持，只是不再传输音频帧
+        Coord ->> Store: state=PAUSED，记录pauseTime
+        AFH -->> PAD: ACK RECORDING_PAUSED
+        Note over PAD,ASR: WS连接保持，ASR连接保持，停止传帧
     end
 
     rect rgb(232, 245, 232)
-        Note over 前台接待员,DB: 阶段五：继续录音
+        Note over 前台接待员,DB: 阶段⑤ 继续录音
         前台接待员 ->> PAD: 点击「继续」
-        PAD ->> Handler: TextMessage {controlAction:"RESUME"}
-        Handler ->> AFH: handleTextMessage()
+        PAD ->> Handler: TextMessage {controlAction:RESUME}
         AFH ->> Coord: resumeSession(wsUUID)
-        Coord ->> Store: context.state = RECORDING，计算 pauseDuration
-        AFH -->> PAD: ACK {type:"RECORDING_RESUMED"}
+        Coord ->> Store: state=RECORDING，计算pauseDuration
+        AFH -->> PAD: ACK RECORDING_RESUMED
     end
 
     rect rgb(240, 232, 255)
-        Note over 前台接待员,DB: 阶段六：停止录音（STOP）
+        Note over 前台接待员,DB: 阶段⑥ 停止录音
         前台接待员 ->> PAD: 点击「完成」
-        PAD ->> Handler: TextMessage {controlAction:"STOP"}
-        Handler ->> AFH: handleTextMessage()
+        PAD ->> Handler: TextMessage {controlAction:STOP}
         AFH ->> Coord: stopSession(wsUUID)
-        Coord ->> Store: context.state = STOPPED
-        Coord ->> ASR: 关闭 ASR 连接
+        Coord ->> Store: state=STOPPED
+        Coord ->> ASR: 关闭ASR连接
         Coord ->> DB: UPDATE lu_communication_log_session (endTime, duration)
         Coord ->> Store: removeContext(wsUUID)
-        Coord -->> AFH: stopped
-        AFH -->> PAD: ACK {type:"RECORDING_STOPPED"}
-        PAD ->> PAD: 关闭 WebSocket 连接
+        AFH -->> PAD: ACK RECORDING_STOPPED
+        PAD ->> PAD: 关闭WebSocket连接
     end
 ```
 
@@ -148,19 +153,19 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant PAD as 前台 PAD
-    participant Handler as CustomWebSocketHandler
-    participant Coord as RecordingSessionCoordinator
+    participant Handler as WsHandler
+    participant Coord as Coordinator
     participant Store as ContextStore
     participant DB as PostgreSQL
 
     Note over PAD,DB: 场景：网络断开 / 浏览器崩溃
-    PAD -x Handler: TCP 连接中断
-    Handler ->> Handler: onTransportError() / afterConnectionClosed()
-    Handler ->> Coord: stopSession(wsUUID)（强制收尾）
-    Coord ->> Store: context.state = STOPPED
-    Coord ->> DB: UPDATE 会话记录，标记 aborted=true
+    PAD -x Handler: TCP连接中断
+    Handler ->> Handler: afterConnectionClosed()
+    Handler ->> Coord: stopSession(wsUUID) 强制收尾
+    Coord ->> Store: state=STOPPED
+    Coord ->> DB: UPDATE 会话记录 aborted=true
     Coord ->> Store: removeContext(wsUUID)
-    Note over PAD,DB: 音频数据已持久化，下次重新叫号可"继续诊疗"
+    Note over PAD,DB: 音频数据已持久化，下次重新叫号可「继续诊疗」
 ```
 
 ---
@@ -169,17 +174,25 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> IDLE : createContext()
+    [*] --> IDLE : createContext
 
-    IDLE --> RECORDING : startSession() / START 控制帧
+    IDLE --> RECORDING : START帧
 
-    RECORDING --> PAUSED : pauseSession() / PAUSE 控制帧
+    RECORDING --> PAUSED : PAUSE帧
 
-    PAUSED --> RECORDING : resumeSession() / RESUME 控制帧
+    PAUSED --> RECORDING : RESUME帧
 
-    RECORDING --> STOPPED : stopSession() / STOP 控制帧 / WS 断开 / 超时
+    RECORDING --> STOPPED : STOP帧/WS断开/超时
 
-    PAUSED --> STOPPED : stopSession() / WS 断开
+    PAUSED --> STOPPED : WS断开
 
-    STOPPED --> [*] : removeContext() 从 Store 清除
+    STOPPED --> [*] : removeContext
 ```
+
+| 状态转换 | 触发条件 | 后续动作 |
+|---------|---------|---------|
+| IDLE → RECORDING | START 控制帧 | 创建 ASR 连接，写 DB session |
+| RECORDING → PAUSED | PAUSE 控制帧 | 停止传帧，WS/ASR 保持 |
+| PAUSED → RECORDING | RESUME 控制帧 | 继续传帧，累计 pauseDuration |
+| RECORDING → STOPPED | STOP / WS 断开 / 超时 | 关闭 ASR，归档 DB，清除 Context |
+| PAUSED → STOPPED | WS 断开 | 同上 |

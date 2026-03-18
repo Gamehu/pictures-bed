@@ -1,7 +1,10 @@
 # v1.5 录音架构总览图
 
-> PAD 与 Web 工作站共用后端录音架构的整体结构。
-> 详细流程图见：[PAD 前台录音](./pad-recording.md) · [Web 工作站录音](./web-recording.md)
+> 本文档为 `v1.5-详细设计.md` 第 9 章配套图示，呈现 PAD 与 Web 工作站共用后端录音架构的整体结构。
+>
+> 详细流程图见：
+> - [v1.5-架构图-PAD录音.md](./v1.5-架构图-PAD录音.md)
+> - [v1.5-架构图-Web录音.md](./v1.5-架构图-Web录音.md)
 
 ---
 
@@ -10,45 +13,36 @@
 ```mermaid
 graph TB
     subgraph Clients["接入端（两端共用同一套后端）"]
-        PAD["📱 前台 PAD\nroleCode = RECEPTIONIST\n单连接 · 固定用户"]
-        WEB["🖥️ Web 工作站\nroleCode = DOCTOR\n连接池 · 多医生并发"]
+        PAD["PAD 前台\nroleCode=RECEPTIONIST 单连接"]
+        WEB["Web 工作站\nroleCode=DOCTOR 连接池 多医生"]
     end
 
     subgraph WSInfra["goodsop-common-websocket（基础设施层）"]
-        Interceptor["UserAttributeHandshakeInterceptor\n验证 JWT · 提取用户属性"]
-        Router["CustomWebSocketHandler\n按 type 路由消息"]
-        SessionHolder["WebSocketSessionHolder\nConcurrentHashMap&lt;sessionKey, WsSession&gt;"]
+        Interceptor["UserAttributeHandshakeInterceptor\n验证JWT 提取用户属性"]
+        Router["CustomWebSocketHandler\n按type路由消息"]
+        SessionHolder["WebSocketSessionHolder"]
     end
 
     subgraph BizLayer["goodsop-app-server-biz（业务层）"]
-        AFH["AudioFrameHandler\n音频帧处理 · 状态机控制"]
-
-        subgraph Strategy["身份解析策略（Strategy 模式）"]
-            direction LR
-            Resolver{"RecordingIdentityResolver"}
-            Default["DefaultIdentityResolver\nPAD：loginUser = recordingUser"]
-            HeaderDel["HeaderDelegatedIdentityResolver\nWeb：读 doctorId Header"]
-            Resolver --> Default
-            Resolver --> HeaderDel
-        end
-
-        Coordinator["RecordingSessionCoordinator\nSTART / PAUSE / RESUME / STOP"]
-        Store["RecordingSessionContextStore\nConcurrentHashMap&lt;wsSessionId, SessionContext&gt;"]
-        Timeout["AsrSessionTimeoutManager\n静默超时检测（10min）"]
+        AFH["AudioFrameHandler\n音频帧处理 状态机控制"]
+        Resolver["RecordingIdentityResolver\nStrategy模式"]
+        Coordinator["RecordingSessionCoordinator\nSTART PAUSE RESUME STOP"]
+        Store["RecordingSessionContextStore\nConcurrentHashMap"]
+        Timeout["AsrSessionTimeoutManager\n静默超时 10min"]
     end
 
     subgraph Downstream["下游服务"]
-        ASR["AsrWebSocketClient\n第三方 ASR 转写服务"]
-        ConsultSvc["ConsultationService\n叫号 · 声纹校验 · 状态流转"]
+        ASR["AsrWebSocketClient\n第三方ASR转写"]
+        ConsultSvc["ConsultationService\n叫号 声纹校验 状态流转"]
     end
 
     subgraph Storage["存储层"]
-        DB[("PostgreSQL\nlu_communication_segment\nlu_communication_audio\nlu_communication_log_session")]
-        Redis[("Redis\nArchiveSessionRedisStore\n会话状态持久化")]
+        DB[("PostgreSQL")]
+        Redis[("Redis\n会话状态持久化")]
     end
 
-    PAD -- "WS Header\nroleCode=RECEPTIONIST" --> Interceptor
-    WEB -- "WS Header\nroleCode=DOCTOR\ndoctorId={id}" --> Interceptor
+    PAD --> Interceptor
+    WEB --> Interceptor
     Interceptor --> Router
     Router --> SessionHolder
     Router --> AFH
@@ -57,8 +51,7 @@ graph TB
     Coordinator --> Store
     Store --> Timeout
     AFH --> ASR
-    ASR -- "转写结果" --> AFH
-    ConsultSvc -- "archiveSessionId" --> AFH
+    ConsultSvc --> AFH
     Coordinator --> DB
     Store --> Redis
 ```
@@ -70,22 +63,22 @@ graph TB
 ```mermaid
 graph LR
     subgraph Frontend["前端"]
-        REG["registrationId\n挂号单 ID\n业务层唯一键"]
-        WS_ID["wsSessionId\nUUID（前端生成）\n每次 WS 连接独立"]
+        REG["registrationId\n挂号单ID 业务唯一键"]
+        WS_ID["wsSessionId\nUUID 每次WS连接独立"]
     end
 
     subgraph Backend["后端内存"]
-        CTX_STORE["RecordingSessionContextStore\nkey = wsSessionId"]
+        CTX_STORE["RecordingSessionContextStore\nkey=wsSessionId"]
     end
 
     subgraph DB["数据库"]
-        ARCHIVE["archiveSessionId\n= lu_communication_log.id\n后端叫号接口返回"]
+        ARCHIVE["archiveSessionId\n=lu_communication_log.id\n后端叫号接口返回"]
     end
 
-    REG -- "1. 叫号接口" --> ARCHIVE
-    ARCHIVE -- "2. 返回给前端" --> WS_ID
-    WS_ID -- "3. WS 握手 + START 帧" --> CTX_STORE
-    ARCHIVE -- "4. Header 携带" --> CTX_STORE
+    REG -- "1.叫号接口" --> ARCHIVE
+    ARCHIVE -- "2.返回给前端" --> WS_ID
+    WS_ID -- "3.WS握手+START帧" --> CTX_STORE
+    ARCHIVE -- "4.Header携带" --> CTX_STORE
 
     style REG fill:#e8f4fd,stroke:#2196F3
     style WS_ID fill:#fff3e0,stroke:#FF9800
@@ -113,12 +106,10 @@ classDiagram
     class DefaultIdentityResolver {
         +resolveRecordingUserId(session, loginUserId) Long
     }
-    note for DefaultIdentityResolver "直接返回 loginUserId\nPAD 场景默认实现"
 
     class HeaderDelegatedIdentityResolver {
         +resolveRecordingUserId(session, loginUserId) Long
     }
-    note for HeaderDelegatedIdentityResolver "读取 doctorId Header\n失败则 fallback loginUserId"
 
     class AudioFrameHandler {
         -identityResolver RecordingIdentityResolver
@@ -128,15 +119,14 @@ classDiagram
     }
 
     class SessionContext {
-        +Long recordingUserId
-        +RecordingState state
-        +String archiveSessionId
-        +String roleCode
+        +recordingUserId Long
+        +state RecordingState
+        +archiveSessionId String
+        +roleCode String
     }
-    note for SessionContext "recordingUserId 永远非 null\n由 Resolver 在初始化时赋值"
 
-    RecordingIdentityResolver <|.. DefaultIdentityResolver
-    RecordingIdentityResolver <|.. HeaderDelegatedIdentityResolver
+    RecordingIdentityResolver <|.. DefaultIdentityResolver : PAD场景 loginUser=recordingUser
+    RecordingIdentityResolver <|.. HeaderDelegatedIdentityResolver : Web场景 读doctorId Header
     AudioFrameHandler --> RecordingIdentityResolver : 组合
     AudioFrameHandler --> SessionContext : 创建/操作
 ```
@@ -145,32 +135,12 @@ classDiagram
 
 ## 4. PAD vs Web 核心差异对比
 
-```mermaid
-graph TB
-    subgraph PAD_FLOW["PAD 前台录音（单会话）"]
-        P1["登录用户 = 录音归属人\nDefaultIdentityResolver"]
-        P2["单条 WS 连接\n始终保持"]
-        P3["roleCode = RECEPTIONIST"]
-        P4["声纹校验：弱（可选）"]
-        P5["静默超时：可配置"]
-    end
-
-    subgraph WEB_FLOW["Web 工作站录音（多会话并发）"]
-        W1["登录用户 ≠ 录音归属人\nHeaderDelegatedIdentityResolver"]
-        W2["连接池\nMap&lt;registrationId, WsConn&gt;"]
-        W3["roleCode = DOCTOR"]
-        W4["声纹校验：强（叫号前必须通过）"]
-        W5["静默超时：10min 无帧自动收尾"]
-    end
-
-    subgraph SHARED["共用部分（不改动）"]
-        S1["AudioFrameHandler 核心逻辑"]
-        S2["RecordingSessionCoordinator"]
-        S3["RecordingSessionContextStore\nConcurrentHashMap 天然并发安全"]
-        S4["AsrWebSocketClient"]
-        S5["归档 / 分段 / Segment 处理"]
-    end
-
-    PAD_FLOW --> SHARED
-    WEB_FLOW --> SHARED
-```
+| 维度 | PAD 前台录音 | Web 工作站录音 |
+|------|-------------|--------------|
+| 登录用户与录音归属 | 登录用户 = 录音归属人 | 登录用户（院长）≠ 录音归属人（医生） |
+| 连接数 | 单条 WS 始终保持 | 连接池，多医生并发各一条 |
+| roleCode | RECEPTIONIST | DOCTOR |
+| 声纹校验 | 弱（可选） | 强（叫号前必须通过） |
+| 静默超时 | 可配置 | 10min 无帧自动收尾 |
+| 身份解析器 | DefaultIdentityResolver | HeaderDelegatedIdentityResolver |
+| 后端改动 | 无 | 仅新增 Resolver 实现 |
