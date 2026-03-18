@@ -11,24 +11,21 @@
 stateDiagram-v2
     direction TB
 
-    [*] --> 候诊中 : 现场挂号 / 预约到店签到\n前台 PAD 创建挂号单
+    [*] --> 候诊中 : 现场挂号 / 预约到店签到
 
-    候诊中 --> 诊疗中 : 医生叫号\n① 创建 lu_communication_log（archiveSessionId）\n② 建立 WebSocket 连接\n③ 开始录音（sequenceNumber = 1）
-
+    候诊中 --> 诊疗中 : 叫号
     候诊中 --> 已取消 : 取消挂号
 
     state 诊疗中 {
         direction LR
         [*] --> 录音中
-        录音中 --> 录音已暂停 : 点击「暂停」\nWS 保持 · ASR 停止计费
-        录音已暂停 --> 录音中 : 点击「继续」\nASR 恢复
+        录音中 --> 录音已暂停 : 暂停
+        录音已暂停 --> 录音中 : 继续
     }
 
-    诊疗中 --> 已完成 : 点击「完成诊疗」\n① 发送 STOP 帧\n② WS 关闭\n③ 触发 AI 档案生成异步任务
-
-    已完成 --> 诊疗中 : 继续诊疗\n① sequenceNumber++\n② 建立新 WS 连接\n③ 重新开始录音\narcheSessionId 不变
-
-    已完成 --> 已结束 : 当日诊疗彻底结束\n（无需继续诊疗）
+    诊疗中 --> 已完成 : 完成诊疗
+    已完成 --> 诊疗中 : 继续诊疗
+    已完成 --> 已结束 : 当日结束
 
     已取消 --> [*]
     已结束 --> [*]
@@ -36,32 +33,37 @@ stateDiagram-v2
 
 ---
 
-## 2. 关键节点说明
+## 2. 关键转换说明
 
-| 状态 | 对应数据变化 | 触发端 |
-|------|------------|--------|
-| **候诊中** | `tb_registration.status = WAITING` | 前台 PAD 挂号 / 预约到店 |
-| **诊疗中（录音中）** | 创建 `lu_communication_log`，`lu_communication_log_session`（sequenceNumber=N），WS 连接建立 | Web 工作站医生叫号 |
-| **诊疗中（录音已暂停）** | `SessionContext.state = PAUSED`，同步写 Redis | Web 工作站点击暂停 |
-| **已完成** | `tb_registration.status = COMPLETED`，`SessionContext` 进入 STOPPED，触发档案生成 | Web 工作站完成诊疗 |
-| **继续诊疗** | 新增 `lu_communication_log_session`（sequenceNumber+1），archiveSessionId **不变** | Web 工作站继续诊疗 |
-| **已结束** | `tb_registration.status = CLOSED` | 当日结束 / 手动关闭 |
-| **已取消** | `tb_registration.status = CANCELLED` | 前台 PAD 或系统端取消 |
+| 转换 | 触发操作 | 数据变化 | 触发端 |
+|------|---------|---------|--------|
+| `[*] → 候诊中` | 现场挂号 / 预约到店 | 创建 `tb_registration`，status = WAITING | 前台 PAD |
+| `候诊中 → 诊疗中` | 医生叫号 | 创建 `lu_communication_log`（archiveSessionId），建立 WS 连接，开始录音（sequenceNumber = 1） | Web 工作站 |
+| `录音中 → 录音已暂停` | 点击「暂停」 | SessionContext.state = PAUSED，同步写 Redis，WS 保持，ASR 停止 | Web 工作站 |
+| `录音已暂停 → 录音中` | 点击「继续」 | SessionContext.state = RECORDING，ASR 恢复 | Web 工作站 |
+| `诊疗中 → 已完成` | 点击「完成诊疗」 | 发送 STOP 帧，WS 关闭，status = COMPLETED，触发 AI 档案异步生成 | Web 工作站 |
+| `已完成 → 诊疗中` | 点击「继续诊疗」 | sequenceNumber++，建立新 WS 连接，开始新一轮录音，archiveSessionId 不变 | Web 工作站 |
+| `已完成 → 已结束` | 当日诊疗彻底结束 | status = CLOSED | Web 工作站 / 系统 |
+| `候诊中 → 已取消` | 取消挂号 | status = CANCELLED | 前台 PAD / 系统端 |
 
 ---
 
-## 3. 继续诊疗与暂停录音的区别
+## 3. 暂停录音 vs 继续诊疗
+
+两个容易混淆的概念，本质是不同层次的操作：
 
 ```mermaid
-graph LR
-    subgraph 暂停录音["暂停录音（同一诊疗轮次内）"]
-        A1["录音中"] -- "点击「暂停」" --> A2["录音已暂停"]
-        A2 -- "点击「继续」" --> A1
+graph TB
+    subgraph A["暂停录音（同一诊疗轮次内）"]
+        direction LR
+        A1["录音中"] -->|"点击「暂停」"| A2["录音已暂停"]
+        A2 -->|"点击「继续」"| A1
     end
 
-    subgraph 继续诊疗["继续诊疗（跨诊疗轮次）"]
-        B1["已完成\n(sequenceNumber=1)"] -- "点击「继续诊疗」" --> B2["诊疗中\n(sequenceNumber=2)"]
-        B2 -- "点击「完成诊疗」" --> B3["已完成\n(sequenceNumber=2)"]
+    subgraph B["继续诊疗（跨诊疗轮次）"]
+        direction LR
+        B1["已完成 seq=1"] -->|"点击「继续诊疗」"| B2["诊疗中 seq=2"]
+        B2 -->|"点击「完成诊疗」"| B3["已完成 seq=2"]
     end
 ```
 
@@ -70,6 +72,6 @@ graph LR
 | WS 连接 | 保持不断 | 关闭旧连接，建立新连接 |
 | archiveSessionId | 不变 | 不变 |
 | sequenceNumber | 不变 | +1 |
-| ASR 连接 | 保持（停止计费） | 关闭后重新建立 |
+| ASR 连接 | 保持（停止计费） | 关闭后重建 |
 | 挂号单状态 | 诊疗中（不变） | 已完成 → 诊疗中 |
-| Redis active key | 不变 | 旧 key 删除，写入新 wsSessionId |
+| Redis active key | 不变 | 删除旧 key，写入新 wsSessionId |
