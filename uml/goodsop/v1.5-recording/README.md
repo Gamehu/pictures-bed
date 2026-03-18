@@ -8,3 +8,4 @@
 | [overview.md](./overview.md) | 4 张 | 整体分层图 · Session ID 双层设计 · Strategy 类图 · PAD vs Web 对比 |
 | [pad-recording.md](./pad-recording.md) | 4 张 | 组件关系图 · 完整录音时序 · WS 断开异常 · SessionContext 状态机 |
 | [web-recording.md](./web-recording.md) | 6 张 | 组件关系图 · 多医生并发时序 · 声纹校验失败 · 超时收尾 · 断线重连 · 内存状态快照 |
+| [registration-state-machine.md](./registration-state-machine.md) | 3 张 | 挂号单完整状态机 · 关键节点说明 · 暂停录音 vs 继续诊疗对比 |
