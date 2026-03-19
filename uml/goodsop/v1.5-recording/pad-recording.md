@@ -65,7 +65,7 @@ graph TD
 | `tenantId` | Long | ✅ | 租户 ID（Interceptor 从 JWT 提取） |
 | `shopId` | Long | ✅ | 门店 ID（Interceptor 从 JWT 提取） |
 
-> **注意**：PAD 前台**没有叫号动作**。`archiveSessionId` 由前台通过查询当前诊疗状态或接收事件通知获得，在「开始录音」前必须已拿到该值。
+> **注意**：PAD 前台**前台无开始诊疗动作**。`archiveSessionId` 由前台通过查询当前诊疗状态或接收事件通知获得，在「开始录音」前必须已拿到该值。
 
 ### 2.2 控制帧 TextMessage（前端 → 后端）
 

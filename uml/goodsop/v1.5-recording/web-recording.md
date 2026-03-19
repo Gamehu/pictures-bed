@@ -18,7 +18,7 @@ graph TD
     end
 
     subgraph HTTP["HTTP 接口层"]
-        CALL_API["POST /workstation/consultation/call\n叫号接口（含声纹校验）"]
+        CALL_API["POST /workstation/consultation/call\n开始诊疗接口（含声纹校验）"]
         DONE_API["POST /workstation/consultation/complete\n完成诊疗接口"]
     end
 
@@ -65,7 +65,7 @@ graph TD
 
 ## 2. 关键接口入参说明
 
-### 2.1 叫号接口 POST /workstation/consultation/call
+### 2.1 开始诊疗接口 POST /workstation/consultation/call
 
 **Request Body：**
 
@@ -95,7 +95,7 @@ graph TD
 | `Authorization` | String | ✅ | `Bearer {JWT}`（院长 token） |
 | `roleCode` | String | ✅ | 固定值 `DOCTOR` |
 | `doctorId` | Long | ✅ | 实际接诊医生 ID（与 JWT userId 不同） |
-| `archiveSessionId` | String | ✅ | 叫号接口返回的诊疗会话 ID |
+| `archiveSessionId` | String | ✅ | 开始诊疗接口返回的诊疗会话 ID |
 | `tenantId` | Long | ✅ | 租户 ID（Interceptor 从 JWT 提取） |
 | `shopId` | Long | ✅ | 门店 ID（Interceptor 从 JWT 提取） |
 
@@ -109,7 +109,7 @@ graph TD
 {
   "controlAction": "START | PAUSE | RESUME | STOP",
   "sessionId": "uuid-v4（前端连接时生成，作为 wsSessionId）",
-  "archiveSessionId": "叫号接口返回值（START帧必填）"
+  "archiveSessionId": "开始诊疗接口返回值（START帧必填）"
 }
 ```
 
@@ -169,8 +169,8 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     rect rgb(232, 244, 253)
-        Note over 医生A,DB: 医生A：叫号并开始录音（regId=101）
-        医生A ->> WEB: 点击「叫号/开始」(regId=101, doctorId=1001)
+        Note over 医生A,DB: 医生A：开始诊疗并录音（regId=101）
+        医生A ->> WEB: 点击「开始诊疗」(regId=101, doctorId=1001)
         WEB ->> CallAPI: POST /call {registrationId:101, doctorId:1001}
         CallAPI ->> VP: existsByUserId(doctorId=1001)
         VP -->> CallAPI: 声纹已录入
@@ -192,8 +192,8 @@ sequenceDiagram
     end
 
     rect rgb(232, 245, 232)
-        Note over 医生A,DB: 医生B：叫号并开始录音（regId=202）—— 与医生A并发
-        医生B ->> WEB: 点击「叫号/开始」(regId=202, doctorId=1002)
+        Note over 医生A,DB: 医生B：开始诊疗并录音（regId=202）—— 与医生A并发
+        医生B ->> WEB: 点击「开始诊疗」(regId=202, doctorId=1002)
         WEB ->> CallAPI: POST /call {registrationId:202, doctorId:1002}
         CallAPI ->> VP: existsByUserId(doctorId=1002)
         VP -->> CallAPI: 声纹已录入
@@ -264,7 +264,7 @@ sequenceDiagram
     participant CallAPI as /consultation/call
     participant VP as VoiceprintService
 
-    医生C ->> WEB: 点击「叫号/开始」(doctorId=1003)
+    医生C ->> WEB: 点击「开始诊疗」(doctorId=1003)
     WEB ->> CallAPI: POST /call {registrationId:303, doctorId:1003}
     CallAPI ->> VP: existsByUserId(1003)
     VP -->> CallAPI: 未录入声纹

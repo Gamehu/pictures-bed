@@ -33,7 +33,7 @@ graph TB
 
     subgraph Downstream["下游服务"]
         ASR["AsrWebSocketClient\n第三方ASR转写"]
-        ConsultSvc["ConsultationService\n叫号 声纹校验 状态流转"]
+        ConsultSvc["ConsultationService\n开始诊疗 声纹校验 状态流转"]
     end
 
     subgraph Storage["存储层"]
@@ -72,10 +72,10 @@ graph LR
     end
 
     subgraph DB["数据库"]
-        ARCHIVE["archiveSessionId\n=lu_communication_log.id\n后端叫号接口返回"]
+        ARCHIVE["archiveSessionId\n=lu_communication_log.id\n开始诊疗接口返回"]
     end
 
-    REG -- "1.叫号接口" --> ARCHIVE
+    REG -- "1.开始诊疗接口" --> ARCHIVE
     ARCHIVE -- "2.返回给前端" --> WS_ID
     WS_ID -- "3.WS握手+START帧" --> CTX_STORE
     ARCHIVE -- "4.Header携带" --> CTX_STORE
@@ -140,7 +140,7 @@ classDiagram
 | 登录用户与录音归属 | 登录用户 = 录音归属人 | 登录用户（院长）≠ 录音归属人（医生） |
 | 连接数 | 单条 WS 始终保持 | 连接池，多医生并发各一条 |
 | roleCode | RECEPTIONIST | DOCTOR |
-| 声纹校验 | 弱（可选） | 强（叫号前必须通过） |
+| 声纹校验 | 弱（可选） | 强（开始诊疗前必须通过） |
 | 静默超时 | 可配置 | 10min 无帧自动收尾 |
 | 身份解析器 | DefaultIdentityResolver | HeaderDelegatedIdentityResolver |
 | 后端改动 | 无 | 仅新增 Resolver 实现 |
